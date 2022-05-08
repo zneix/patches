@@ -1,0 +1,1192 @@
+# time: 1652040897
+# commit: a5930f222
+diff --git a/chatterino.pro b/chatterino.pro
+index 97089e66b..bed0fca34 100644
+--- a/chatterino.pro
++++ b/chatterino.pro
+@@ -209,6 +209,7 @@ SOURCES += \
+     src/providers/irc/IrcServer.cpp \
+     src/providers/IvrApi.cpp \
+     src/providers/LinkResolver.cpp \
++    src/providers/seventv/SeventvEmotes.cpp \
+     src/providers/twitch/api/Helix.cpp \
+     src/providers/twitch/ChannelPointReward.cpp \
+     src/providers/twitch/IrcMessageHandler.cpp \
+@@ -451,6 +452,7 @@ HEADERS += \
+     src/providers/irc/IrcServer.hpp \
+     src/providers/IvrApi.hpp \
+     src/providers/LinkResolver.hpp \
++    src/providers/seventv/SeventvEmotes.hpp \
+     src/providers/twitch/api/Helix.hpp \
+     src/providers/twitch/ChannelPointReward.hpp \
+     src/providers/twitch/ChatterinoWebSocketppLogger.hpp \
+diff --git a/src/Application.cpp b/src/Application.cpp
+index 357e39932..afb87c955 100644
+--- a/src/Application.cpp
++++ b/src/Application.cpp
+@@ -17,6 +17,7 @@
+ #include "providers/ffz/FfzBadges.hpp"
+ #include "providers/ffz/FfzEmotes.hpp"
+ #include "providers/irc/Irc2.hpp"
++#include "providers/seventv/SeventvEmotes.hpp"
+ #include "providers/twitch/PubSubManager.hpp"
+ #include "providers/twitch/TwitchIrcServer.hpp"
+ #include "providers/twitch/TwitchMessageBuilder.hpp"
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 2014e277d..172ac2ddd 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -170,6 +170,9 @@ set(SOURCE_FILES
+         providers/LinkResolver.cpp
+         providers/LinkResolver.hpp
+ 
++        providers/seventv/SeventvEmotes.cpp
++        providers/seventv/SeventvEmotes.hpp
++
+         providers/bttv/BttvEmotes.cpp
+         providers/bttv/BttvEmotes.hpp
+         providers/bttv/LoadBttvChannelEmote.cpp
+diff --git a/src/common/CompletionModel.cpp b/src/common/CompletionModel.cpp
+index c03fc830d..b3bbd7153 100644
+--- a/src/common/CompletionModel.cpp
++++ b/src/common/CompletionModel.cpp
+@@ -141,6 +141,12 @@ void CompletionModel::refresh(const QString &prefix, bool isFirstWord)
+         }
+     }
+ 
++    // 7TV Global
++    for (auto &emote : *getApp()->twitch->getSeventvEmotes().emotes())
++    {
++        addString(emote.first.string, TaggedString::Type::SEVENTVGlobalEmote);
++    }
++
+     // Bttv Global
+     for (auto &emote : *getApp()->twitch->getBttvEmotes().emotes())
+     {
+@@ -198,6 +204,12 @@ void CompletionModel::refresh(const QString &prefix, bool isFirstWord)
+         }
+     }
+ 
++    // 7TV Channel
++    for (auto &emote : *tc->seventvEmotes())
++    {
++        addString(emote.first.string, TaggedString::Type::SEVENTVChannelEmote);
++    }
++
+     // Bttv Channel
+     for (auto &emote : *tc->bttvEmotes())
+     {
+diff --git a/src/common/CompletionModel.hpp b/src/common/CompletionModel.hpp
+index ee810bbe6..1aaafc8da 100644
+--- a/src/common/CompletionModel.hpp
++++ b/src/common/CompletionModel.hpp
+@@ -20,6 +20,8 @@ class CompletionModel : public QAbstractListModel
+             EmoteStart,
+             FFZGlobalEmote,
+             FFZChannelEmote,
++            SEVENTVGlobalEmote,
++            SEVENTVChannelEmote,
+             BTTVGlobalEmote,
+             BTTVChannelEmote,
+             TwitchGlobalEmote,
+diff --git a/src/common/QLogging.cpp b/src/common/QLogging.cpp
+index a9edaef86..31ad65c9c 100644
+--- a/src/common/QLogging.cpp
++++ b/src/common/QLogging.cpp
+@@ -29,6 +29,7 @@ Q_LOGGING_CATEGORY(chatterinoNotification, "chatterino.notification",
+ Q_LOGGING_CATEGORY(chatterinoNuulsuploader, "chatterino.nuulsuploader",
+                    logThreshold);
+ Q_LOGGING_CATEGORY(chatterinoPubSub, "chatterino.pubsub", logThreshold);
++Q_LOGGING_CATEGORY(chatterinoSeventv, "chatterino.seventv", logThreshold);
+ Q_LOGGING_CATEGORY(chatterinoStreamlink, "chatterino.streamlink", logThreshold);
+ Q_LOGGING_CATEGORY(chatterinoStreamerMode, "chatterino.streamermode",
+                    logThreshold);
+diff --git a/src/common/QLogging.hpp b/src/common/QLogging.hpp
+index 2687b7862..5a758ea3e 100644
+--- a/src/common/QLogging.hpp
++++ b/src/common/QLogging.hpp
+@@ -6,6 +6,7 @@ Q_DECLARE_LOGGING_CATEGORY(chatterinoApp);
+ Q_DECLARE_LOGGING_CATEGORY(chatterinoArgs);
+ Q_DECLARE_LOGGING_CATEGORY(chatterinoBenchmark);
+ Q_DECLARE_LOGGING_CATEGORY(chatterinoBttv);
++Q_DECLARE_LOGGING_CATEGORY(chatterinoSeventv);
+ Q_DECLARE_LOGGING_CATEGORY(chatterinoCache);
+ Q_DECLARE_LOGGING_CATEGORY(chatterinoCommon);
+ Q_DECLARE_LOGGING_CATEGORY(chatterinoEmoji);
+diff --git a/src/messages/Emote.hpp b/src/messages/Emote.hpp
+index 143d3ea64..c7105953b 100644
+--- a/src/messages/Emote.hpp
++++ b/src/messages/Emote.hpp
+@@ -14,6 +14,7 @@ struct Emote {
+     ImageSet images;
+     Tooltip tooltip;
+     Url homePage;
++    bool zeroWidth;
+ 
+     // FOURTF: no solution yet, to be refactored later
+     const QString &getCopyString() const
+diff --git a/src/messages/ImageSet.cpp b/src/messages/ImageSet.cpp
+index 1dccf10e9..90c61e3ea 100644
+--- a/src/messages/ImageSet.cpp
++++ b/src/messages/ImageSet.cpp
+@@ -8,23 +8,28 @@ ImageSet::ImageSet()
+     : imageX1_(Image::getEmpty())
+     , imageX2_(Image::getEmpty())
+     , imageX3_(Image::getEmpty())
++    , imageX4_(Image::getEmpty())
+ {
+ }
+ 
+ ImageSet::ImageSet(const ImagePtr &image1, const ImagePtr &image2,
+-                   const ImagePtr &image3)
++                   const ImagePtr &image3, const ImagePtr &image4)
+     : imageX1_(image1)
+     , imageX2_(image2)
+     , imageX3_(image3)
++    , imageX4_(image4)
+ {
+ }
+ 
+-ImageSet::ImageSet(const Url &image1, const Url &image2, const Url &image3)
++ImageSet::ImageSet(const Url &image1, const Url &image2, const Url &image3,
++                   const Url &image4)
+     : imageX1_(Image::fromUrl(image1, 1))
+     , imageX2_(image2.string.isEmpty() ? Image::getEmpty()
+                                        : Image::fromUrl(image2, 0.5))
+     , imageX3_(image3.string.isEmpty() ? Image::getEmpty()
+                                        : Image::fromUrl(image3, 0.25))
++    , imageX4_(image4.string.isEmpty() ? Image::getEmpty()
++                                       : Image::fromUrl(image4, 0.125))
+ {
+ }
+ 
+@@ -43,6 +48,11 @@ void ImageSet::setImage3(const ImagePtr &image)
+     this->imageX3_ = image;
+ }
+ 
++void ImageSet::setImage4(const ImagePtr &image)
++{
++    this->imageX4_ = image;
++}
++
+ const ImagePtr &ImageSet::getImage1() const
+ {
+     return this->imageX1_;
+@@ -58,6 +68,11 @@ const ImagePtr &ImageSet::getImage3() const
+     return this->imageX3_;
+ }
+ 
++const ImagePtr &ImageSet::getImage4() const
++{
++    return this->imageX4_;
++}
++
+ const std::shared_ptr<Image> &getImagePriv(const ImageSet &set, float scale)
+ {
+ #ifndef CHATTERINO_TEST
+@@ -66,12 +81,19 @@ const std::shared_ptr<Image> &getImagePriv(const ImageSet &set, float scale)
+ 
+     int quality = 1;
+ 
+-    if (scale > 2.001f)
++    if (scale > 3.001f)
++        quality = 4;
++    else if (scale > 2.001f)
+         quality = 3;
+     else if (scale > 1.001f)
+         quality = 2;
+ 
+-    if (!set.getImage3()->isEmpty() && quality == 3)
++    // if (!set.getImage4()->isEmpty() && quality == 4)
++    // {
++    //     return set.getImage4();
++    // }
++
++    if (!set.getImage3()->isEmpty() && quality >= 3)
+     {
+         return set.getImage3();
+     }
+@@ -94,6 +116,9 @@ const ImagePtr &ImageSet::getImageOrLoaded(float scale) const
+     // prefer other image if selected image is not loaded yet
+     if (result->loaded())
+         return result;
++    else if (this->imageX4_ && !this->imageX4_->isEmpty() &&
++             this->imageX4_->loaded())
++        return this->imageX4_;
+     else if (this->imageX3_ && !this->imageX3_->isEmpty() &&
+              this->imageX3_->loaded())
+         return this->imageX3_;
+@@ -113,8 +138,9 @@ const ImagePtr &ImageSet::getImage(float scale) const
+ 
+ bool ImageSet::operator==(const ImageSet &other) const
+ {
+-    return std::tie(this->imageX1_, this->imageX2_, this->imageX3_) ==
+-           std::tie(other.imageX1_, other.imageX2_, other.imageX3_);
++    return std::tie(this->imageX1_, this->imageX2_, this->imageX3_,
++                    this->imageX4_) == std::tie(other.imageX1_, other.imageX2_,
++                                                other.imageX3_, other.imageX4_);
+ }
+ 
+ bool ImageSet::operator!=(const ImageSet &other) const
+diff --git a/src/messages/ImageSet.hpp b/src/messages/ImageSet.hpp
+index 4e484eedb..b73e29da1 100644
+--- a/src/messages/ImageSet.hpp
++++ b/src/messages/ImageSet.hpp
+@@ -9,15 +9,19 @@ class ImageSet
+ public:
+     ImageSet();
+     ImageSet(const ImagePtr &image1, const ImagePtr &image2 = Image::getEmpty(),
+-             const ImagePtr &image3 = Image::getEmpty());
+-    ImageSet(const Url &image1, const Url &image2 = {}, const Url &image3 = {});
++             const ImagePtr &image3 = Image::getEmpty(),
++             const ImagePtr &image4 = Image::getEmpty());
++    ImageSet(const Url &image1, const Url &image2 = {}, const Url &image3 = {},
++             const Url &image4 = {});
+ 
+     void setImage1(const ImagePtr &image);
+     void setImage2(const ImagePtr &image);
+     void setImage3(const ImagePtr &image);
++    void setImage4(const ImagePtr &image);
+     const ImagePtr &getImage1() const;
+     const ImagePtr &getImage2() const;
+     const ImagePtr &getImage3() const;
++    const ImagePtr &getImage4() const;
+ 
+     /// Preferes getting an already loaded image, even if it is smaller/bigger.
+     /// However, it starts loading the proper image.
+@@ -31,6 +35,7 @@ private:
+     ImagePtr imageX1_;
+     ImagePtr imageX2_;
+     ImagePtr imageX3_;
++    ImagePtr imageX4_;
+ };
+ 
+ }  // namespace chatterino
+diff --git a/src/messages/MessageElement.hpp b/src/messages/MessageElement.hpp
+index 5739aada2..9a5af9d0a 100644
+--- a/src/messages/MessageElement.hpp
++++ b/src/messages/MessageElement.hpp
+@@ -47,8 +47,15 @@ enum class MessageElementFlag : int64_t {
+     FfzEmoteImage = (1LL << 9),
+     FfzEmoteText = (1LL << 10),
+     FfzEmote = FfzEmoteImage | FfzEmoteText,
+-    EmoteImages = TwitchEmoteImage | BttvEmoteImage | FfzEmoteImage,
+-    EmoteText = TwitchEmoteText | BttvEmoteText | FfzEmoteText,
++
++    SeventvEmoteImage = (1LL << 32),
++    SeventvEmoteText = (1LL << 33),
++    SeventvEmote = SeventvEmoteImage | SeventvEmoteText,
++
++    EmoteImages =
++        TwitchEmoteImage | BttvEmoteImage | FfzEmoteImage | SeventvEmoteImage,
++    EmoteText =
++        TwitchEmoteText | BttvEmoteText | FfzEmoteText | SeventvEmoteText,
+ 
+     BitsStatic = (1LL << 11),
+     BitsAnimated = (1LL << 12),
+@@ -123,12 +130,15 @@ enum class MessageElementFlag : int64_t {
+     OriginalLink = (1LL << 30),
+ 
+     // ZeroWidthEmotes are emotes that are supposed to overlay over any pre-existing emotes
+-    // e.g. BTTV's SoSnowy during christmas season
++    // e.g. BTTV's SoSnowy during christmas season or zerowidth 7TV emotes
+     ZeroWidthEmote = (1LL << 31),
+ 
++    // (1LL << 32) is used by SeventvEmoteImage, it is next to FfzEmote
++    // (1LL << 33) is used by SeventvEmoteText, it is next to SeventvEmoteImage
++
+     Default = Timestamp | Badges | Username | BitsStatic | FfzEmoteImage |
+-              BttvEmoteImage | TwitchEmoteImage | BitsAmount | Text |
+-              AlwaysShow,
++              BttvEmoteImage | SeventvEmoteImage | TwitchEmoteImage |
++              BitsAmount | Text | AlwaysShow,
+ };
+ using MessageElementFlags = FlagsEnum<MessageElementFlag>;
+ 
+diff --git a/src/providers/bttv/BttvEmotes.cpp b/src/providers/bttv/BttvEmotes.cpp
+index 1ec58af62..b490a9171 100644
+--- a/src/providers/bttv/BttvEmotes.cpp
++++ b/src/providers/bttv/BttvEmotes.cpp
+@@ -58,7 +58,7 @@ namespace {
+                 name,
+                 ImageSet{Image::fromUrl(getEmoteLinkV3(id, "1x"), 1),
+                          Image::fromUrl(getEmoteLinkV3(id, "2x"), 0.5),
+-                         Image::fromUrl(getEmoteLinkV3(id, "3x"), 0.25)},
++                         Image::fromUrl(getEmoteLinkV3(id, "3x"), 0.286)},
+                 Tooltip{name.string + "<br>Global BetterTTV Emote"},
+                 Url{emoteLinkFormat.arg(id.string)},
+             });
+diff --git a/src/providers/ffz/FfzEmotes.cpp b/src/providers/ffz/FfzEmotes.cpp
+index 5608a481e..b69a76729 100644
+--- a/src/providers/ffz/FfzEmotes.cpp
++++ b/src/providers/ffz/FfzEmotes.cpp
+@@ -33,7 +33,7 @@ namespace {
+     {
+         auto url1x = getEmoteLink(urls, "1");
+         auto url2x = getEmoteLink(urls, "2");
+-        auto url3x = getEmoteLink(urls, "4");
++        auto url4x = getEmoteLink(urls, "4");
+ 
+         //, code, tooltip
+         emoteData.name = name;
+@@ -41,8 +41,8 @@ namespace {
+             ImageSet{Image::fromUrl(url1x, 1),
+                      url2x.string.isEmpty() ? Image::getEmpty()
+                                             : Image::fromUrl(url2x, 0.5),
+-                     url3x.string.isEmpty() ? Image::getEmpty()
+-                                            : Image::fromUrl(url3x, 0.25)};
++                     url4x.string.isEmpty() ? Image::getEmpty()
++                                            : Image::fromUrl(url4x, 0.250)};
+         emoteData.tooltip = {tooltip};
+     }
+     EmotePtr cachedOrMake(Emote &&emote, const EmoteId &id)
+diff --git a/src/providers/seventv/SeventvEmotes.cpp b/src/providers/seventv/SeventvEmotes.cpp
+new file mode 100644
+index 000000000..c756ba55d
+--- /dev/null
++++ b/src/providers/seventv/SeventvEmotes.cpp
+@@ -0,0 +1,326 @@
++#include "providers/seventv/SeventvEmotes.hpp"
++
++#include "common/Common.hpp"
++#include "common/NetworkRequest.hpp"
++#include "common/QLogging.hpp"
++#include "messages/Emote.hpp"
++#include "messages/Image.hpp"
++#include "messages/ImageSet.hpp"
++#include "messages/MessageBuilder.hpp"
++#include "providers/twitch/TwitchChannel.hpp"
++#include "singletons/Settings.hpp"
++
++#include <QJsonArray>
++#include <QJsonDocument>
++#include <QThread>
++
++namespace chatterino {
++namespace {
++    const QRegularExpression whitespaceRegex(R"(\s+)");
++
++    const QString CHANNEL_HAS_NO_EMOTES(
++        "This channel has no 7TV channel emotes.");
++    const QString emoteLinkFormat("https://7tv.app/emotes/%1");
++
++    // maximum pageSize that 7tv's API accepts
++    constexpr int maxPageSize = 150;
++
++    Url getEmoteLink(const EmoteId &id, const QString &emoteScale)
++
++    {
++        const QString urlTemplate("https://cdn.7tv.app/emote/%1/%2");
++
++        return {urlTemplate.arg(id.string, emoteScale)};
++    }
++
++    EmotePtr cachedOrMake(Emote &&emote, const EmoteId &id)
++    {
++        static std::unordered_map<EmoteId, std::weak_ptr<const Emote>> cache;
++        static std::mutex mutex;
++
++        return cachedOrMakeEmotePtr(std::move(emote), cache, mutex, id);
++    }
++
++    struct CreateEmoteResult {
++        EmoteId id;
++        EmoteName name;
++        Emote emote;
++    };
++
++    CreateEmoteResult createEmote(QJsonValue jsonEmote, bool isGlobal)
++    {
++        auto id = EmoteId{jsonEmote.toObject().value("id").toString()};
++        auto name = EmoteName{jsonEmote.toObject().value("name").toString()};
++        auto author = EmoteAuthor{jsonEmote.toObject()
++                                      .value("owner")
++                                      .toObject()
++                                      .value("display_name")
++                                      .toString()};
++        int64_t visibility = jsonEmote.toObject().value("visibility").toInt();
++        auto visibilityFlags =
++            SeventvEmoteVisibilityFlags(SeventvEmoteVisibilityFlag(visibility));
++        bool zeroWidth =
++            visibilityFlags.has(SeventvEmoteVisibilityFlag::ZeroWidth);
++
++        auto heightArr = jsonEmote.toObject().value("height").toArray();
++        auto size2x = heightArr.at(1).toDouble();
++        auto size3x = heightArr.at(2).toDouble();
++        auto size4x = heightArr.at(3).toDouble();
++        if (heightArr.size() != 4 || size2x <= 48)
++        {
++            size2x = 0.66;
++            size3x = 0.42;
++        }
++        else
++        {
++            size2x = 0.5;
++            size3x = 0.33;
++        }
++
++        auto emote = Emote(
++            {name,
++             ImageSet{Image::fromUrl(getEmoteLink(id, "1x"), 1),
++                      Image::fromUrl(getEmoteLink(id, "2x"), size2x),
++                      Image::fromUrl(getEmoteLink(id, "3x"), size3x),
++                      Image::fromUrl(getEmoteLink(id, "4x"), 0.25)},
++             Tooltip{QString("%1<br>%2 7TV Emote<br>By: %3")
++                         .arg(name.string, (isGlobal ? "Global" : "Channel"),
++                              author.string)},
++             Url{emoteLinkFormat.arg(id.string)}, zeroWidth});
++
++        auto result = CreateEmoteResult({id, name, emote});
++        return result;
++    }
++
++    std::pair<Outcome, EmoteMap> parseGlobalEmotes(
++        const QJsonArray &jsonEmotes, const EmoteMap &currentEmotes)
++    {
++        auto emotes = EmoteMap();
++
++        // We always show all global emotes, no need to check visibility here
++        for (const auto &jsonEmote : jsonEmotes)
++        {
++            auto emote = createEmote(jsonEmote, true);
++            emotes[emote.name] =
++                cachedOrMakeEmotePtr(std::move(emote.emote), currentEmotes);
++        }
++
++        return {Success, std::move(emotes)};
++    }
++
++    EmoteMap parseChannelEmotes(const QJsonObject &root,
++                                const QString &channelName)
++    {
++        auto emotes = EmoteMap();
++
++        auto jsonEmotes = root.value("emotes").toArray();
++        for (auto jsonEmote_ : jsonEmotes)
++        {
++            auto jsonEmote = jsonEmote_.toObject();
++
++            // Check our visibility of this emote, don't display if unlisted
++            int64_t visibility = jsonEmote.value("visibility").toInt();
++            auto visibilityFlags = SeventvEmoteVisibilityFlags(
++                SeventvEmoteVisibilityFlag(visibility));
++            if (!getSettings()->showUnlistedEmotes &&
++                visibilityFlags.has(SeventvEmoteVisibilityFlag::Unlisted))
++            {
++                continue;
++            }
++
++            auto emote = createEmote(jsonEmote, false);
++            emotes[emote.name] = cachedOrMake(std::move(emote.emote), emote.id);
++        }
++
++        return emotes;
++    }
++}  // namespace
++
++SeventvEmotes::SeventvEmotes()
++    : global_(std::make_shared<EmoteMap>())
++{
++}
++
++std::shared_ptr<const EmoteMap> SeventvEmotes::emotes() const
++{
++    return this->global_.get();
++}
++
++boost::optional<EmotePtr> SeventvEmotes::emote(const EmoteName &name) const
++{
++    auto emotes = this->global_.get();
++    auto it = emotes->find(name);
++
++    if (it == emotes->end())
++        return boost::none;
++    return it->second;
++}
++
++void SeventvEmotes::loadEmotes()
++{
++    qCDebug(chatterinoSeventv) << "Loading 7TV Emotes";
++
++    QJsonObject payload, variables;
++
++    QString query = R"(
++        query loadGlobalEmotes($query: String!, $globalState: String, $page: Int, $limit: Int, $pageSize: Int) {
++        search_emotes(query: $query, globalState: $globalState, page: $page, limit: $limit, pageSize: $pageSize) {
++            id
++            name
++            provider
++            provider_id
++            visibility
++            mime
++            height
++            owner {
++                id
++                display_name
++                login
++                twitch_id
++            }
++        }
++    })";
++
++    variables.insert("query", QString());
++    variables.insert("globalState", "only");
++    variables.insert("page", 1);  // TODO(zneix): Add support for pagination
++    variables.insert("limit", maxPageSize);
++    variables.insert("pageSize", maxPageSize);
++
++    payload.insert("query", query.replace(whitespaceRegex, " "));
++    payload.insert("variables", variables);
++
++    NetworkRequest(apiUrlGQL, NetworkRequestType::Post)
++        .timeout(30000)
++        .header("Content-Type", "application/json")
++        .payload(QJsonDocument(payload).toJson(QJsonDocument::Compact))
++        .onSuccess([this](NetworkResult result) -> Outcome {
++            QJsonArray parsedEmotes = result.parseJson()
++                                          .value("data")
++                                          .toObject()
++                                          .value("search_emotes")
++                                          .toArray();
++            qCDebug(chatterinoSeventv)
++                << "7TV Global Emotes" << parsedEmotes.size();
++
++            auto pair = parseGlobalEmotes(parsedEmotes, *this->global_.get());
++            if (pair.first)
++                this->global_.set(
++                    std::make_shared<EmoteMap>(std::move(pair.second)));
++            return pair.first;
++        })
++        .execute();
++}
++
++void SeventvEmotes::loadChannel(std::weak_ptr<Channel> channel,
++                                const QString &channelId,
++                                std::function<void(EmoteMap &&)> callback,
++                                bool manualRefresh)
++{
++    qCDebug(chatterinoSeventv)
++        << "Reloading 7TV Channel Emotes" << channelId << manualRefresh;
++
++    QJsonObject payload, variables;
++
++    QString query = R"(
++        query loadUserEmotes($login: String!) {
++            user(id: $login) {
++                emotes {
++                    id
++                    name
++                    provider
++                    provider_id
++                    visibility
++                    mime
++                    height
++                    owner {
++                        id
++                        display_name
++                        login
++                        twitch_id
++                    }
++                }
++            }
++        })";
++
++    variables.insert("login", channelId);
++
++    payload.insert("query", query.replace(whitespaceRegex, " "));
++    payload.insert("variables", variables);
++
++    qDebug() << QJsonDocument(payload).toJson(QJsonDocument::Compact);
++
++    NetworkRequest(apiUrlGQL, NetworkRequestType::Post)
++        .timeout(20000)
++        .header("Content-Type", "application/json")
++        .payload(QJsonDocument(payload).toJson(QJsonDocument::Compact))
++        .onSuccess([callback = std::move(callback), channel, channelId,
++                    manualRefresh](NetworkResult result) -> Outcome {
++            QJsonObject parsedEmotes = result.parseJson()
++                                           .value("data")
++                                           .toObject()
++                                           .value("user")
++                                           .toObject();
++
++            auto emoteMap = parseChannelEmotes(parsedEmotes, channelId);
++            bool hasEmotes = !emoteMap.empty();
++
++            qCDebug(chatterinoSeventv)
++                << "Loaded 7TV Channel Emotes" << channelId << emoteMap.size()
++                << manualRefresh;
++
++            if (hasEmotes)
++            {
++                callback(std::move(emoteMap));
++            }
++            if (auto shared = channel.lock(); manualRefresh)
++            {
++                if (hasEmotes)
++                {
++                    shared->addMessage(
++                        makeSystemMessage("7TV channel emotes reloaded."));
++                }
++                else
++                {
++                    shared->addMessage(
++                        makeSystemMessage(CHANNEL_HAS_NO_EMOTES));
++                }
++            }
++            return Success;
++        })
++        .onError([channelId, channel, manualRefresh](NetworkResult result) {
++            auto shared = channel.lock();
++            if (!shared)
++                return;
++            if (result.status() == 400)
++            {
++                qCWarning(chatterinoSeventv)
++                    << "Error occured fetching 7TV emotes: "
++                    << result.parseJson();
++                if (manualRefresh)
++                    shared->addMessage(
++                        makeSystemMessage(CHANNEL_HAS_NO_EMOTES));
++            }
++            else if (result.status() == NetworkResult::timedoutStatus)
++            {
++                // TODO: Auto retry in case of a timeout, with a delay
++                qCWarning(chatterinoSeventv())
++                    << "Fetching 7TV emotes for channel" << channelId
++                    << "failed due to timeout";
++                shared->addMessage(makeSystemMessage(
++                    "Failed to fetch 7TV channel emotes. (timed out)"));
++            }
++            else
++            {
++                qCWarning(chatterinoSeventv)
++                    << "Error fetching 7TV emotes for channel" << channelId
++                    << ", error" << result.status();
++                shared->addMessage(
++                    makeSystemMessage("Failed to fetch 7TV channel "
++                                      "emotes. (unknown error)"));
++            }
++        })
++        .execute();
++}
++
++}  // namespace chatterino
+diff --git a/src/providers/seventv/SeventvEmotes.hpp b/src/providers/seventv/SeventvEmotes.hpp
+new file mode 100644
+index 000000000..ab507c039
+--- /dev/null
++++ b/src/providers/seventv/SeventvEmotes.hpp
+@@ -0,0 +1,53 @@
++#pragma once
++
++#include "boost/optional.hpp"
++#include "common/Aliases.hpp"
++#include "common/Atomic.hpp"
++#include "providers/twitch/TwitchChannel.hpp"
++
++#include <memory>
++
++namespace chatterino {
++
++// https://github.com/SevenTV/ServerGo/blob/dfe867f991e8cfd7a79d93b9bec681216c32abdb/src/mongo/datastructure/datastructure.go#L56-L67
++enum class SeventvEmoteVisibilityFlag : int64_t {
++    None = 0LL,
++
++    Private = (1LL << 0),
++    Global = (1LL << 1),
++    Unlisted = (1LL << 2),
++
++    OverrideBttv = (1LL << 3),
++    OverrideFfz = (1LL << 4),
++    OverrideTwitchGlobal = (1LL << 5),
++    OverrideTwitchSubscriber = (1LL << 6),
++
++    ZeroWidth = (1LL << 7),
++};
++
++using SeventvEmoteVisibilityFlags = FlagsEnum<SeventvEmoteVisibilityFlag>;
++
++struct Emote;
++using EmotePtr = std::shared_ptr<const Emote>;
++class EmoteMap;
++
++class SeventvEmotes final
++{
++    static constexpr const char *apiUrlGQL = "https://api.7tv.app/v2/gql";
++
++public:
++    SeventvEmotes();
++
++    std::shared_ptr<const EmoteMap> emotes() const;
++    boost::optional<EmotePtr> emote(const EmoteName &name) const;
++    void loadEmotes();
++    static void loadChannel(std::weak_ptr<Channel> channel,
++                            const QString &channelId,
++                            std::function<void(EmoteMap &&)> callback,
++                            bool manualRefresh);
++
++private:
++    Atomic<std::shared_ptr<const EmoteMap>> global_;
++};
++
++}  // namespace chatterino
+diff --git a/src/providers/twitch/TwitchChannel.cpp b/src/providers/twitch/TwitchChannel.cpp
+index f88711545..3477322d1 100644
+--- a/src/providers/twitch/TwitchChannel.cpp
++++ b/src/providers/twitch/TwitchChannel.cpp
+@@ -10,6 +10,7 @@
+ #include "messages/Message.hpp"
+ #include "providers/bttv/BttvEmotes.hpp"
+ #include "providers/bttv/LoadBttvChannelEmote.hpp"
++#include "providers/seventv/SeventvEmotes.hpp"
+ #include "providers/twitch/IrcMessageHandler.hpp"
+ #include "providers/twitch/PubSubManager.hpp"
+ #include "providers/twitch/TwitchCommon.hpp"
+@@ -153,6 +154,7 @@ TwitchChannel::TwitchChannel(const QString &name)
+     , channelUrl_("https://twitch.tv/" + name)
+     , popoutPlayerUrl_("https://player.twitch.tv/?parent=twitch.tv&channel=" +
+                        name)
++    , seventvEmotes_(std::make_shared<EmoteMap>())
+     , bttvEmotes_(std::make_shared<EmoteMap>())
+     , ffzEmotes_(std::make_shared<EmoteMap>())
+     , mod_(false)
+@@ -181,6 +183,7 @@ TwitchChannel::TwitchChannel(const QString &name)
+         this->refreshLiveStatus();
+         this->refreshBadges();
+         this->refreshCheerEmotes();
++        this->refresh7TVChannelEmotes(false);
+         this->refreshFFZChannelEmotes(false);
+         this->refreshBTTVChannelEmotes(false);
+     });
+@@ -241,6 +244,18 @@ void TwitchChannel::setLocalizedName(const QString &name)
+     this->nameOptions.localizedName = name;
+ }
+ 
++void TwitchChannel::refresh7TVChannelEmotes(bool manualRefresh)
++{
++    SeventvEmotes::loadChannel(
++        weakOf<Channel>(this), this->roomId(),
++        [this, weak = weakOf<Channel>(this)](auto &&emoteMap) {
++            if (auto shared = weak.lock())
++                this->seventvEmotes_.set(
++                    std::make_shared<EmoteMap>(std::move(emoteMap)));
++        },
++        manualRefresh);
++}
++
+ void TwitchChannel::refreshBTTVChannelEmotes(bool manualRefresh)
+ {
+     BttvEmotes::loadChannel(
+@@ -524,6 +539,17 @@ SharedAccessGuard<const TwitchChannel::StreamStatus>
+     return this->streamStatus_.accessConst();
+ }
+ 
++boost::optional<EmotePtr> TwitchChannel::seventvEmote(
++    const EmoteName &name) const
++{
++    auto emotes = this->seventvEmotes_.get();
++    auto it = emotes->find(name);
++
++    if (it == emotes->end())
++        return boost::none;
++    return it->second;
++}
++
+ boost::optional<EmotePtr> TwitchChannel::bttvEmote(const EmoteName &name) const
+ {
+     auto emotes = this->bttvEmotes_.get();
+@@ -544,6 +570,11 @@ boost::optional<EmotePtr> TwitchChannel::ffzEmote(const EmoteName &name) const
+     return it->second;
+ }
+ 
++std::shared_ptr<const EmoteMap> TwitchChannel::seventvEmotes() const
++{
++    return this->seventvEmotes_.get();
++}
++
+ std::shared_ptr<const EmoteMap> TwitchChannel::bttvEmotes() const
+ {
+     return this->bttvEmotes_.get();
+diff --git a/src/providers/twitch/TwitchChannel.hpp b/src/providers/twitch/TwitchChannel.hpp
+index 9c7ecb258..5bc521f08 100644
+--- a/src/providers/twitch/TwitchChannel.hpp
++++ b/src/providers/twitch/TwitchChannel.hpp
+@@ -46,6 +46,7 @@ using EmotePtr = std::shared_ptr<const Emote>;
+ class EmoteMap;
+ 
+ class TwitchBadges;
++class SeventvEmotes;
+ class FfzEmotes;
+ class BttvEmotes;
+ 
+@@ -100,11 +101,14 @@ public:
+     SharedAccessGuard<const StreamStatus> accessStreamStatus() const;
+ 
+     // Emotes
++    boost::optional<EmotePtr> seventvEmote(const EmoteName &name) const;
+     boost::optional<EmotePtr> bttvEmote(const EmoteName &name) const;
+     boost::optional<EmotePtr> ffzEmote(const EmoteName &name) const;
++    std::shared_ptr<const EmoteMap> seventvEmotes() const;
+     std::shared_ptr<const EmoteMap> bttvEmotes() const;
+     std::shared_ptr<const EmoteMap> ffzEmotes() const;
+ 
++    virtual void refresh7TVChannelEmotes(bool manualRefresh);
+     virtual void refreshBTTVChannelEmotes(bool manualRefresh);
+     virtual void refreshFFZChannelEmotes(bool manualRefresh);
+ 
+@@ -172,6 +176,7 @@ private:
+     UniqueAccess<RoomModes> roomModes_;
+ 
+ protected:
++    Atomic<std::shared_ptr<const EmoteMap>> seventvEmotes_;
+     Atomic<std::shared_ptr<const EmoteMap>> bttvEmotes_;
+     Atomic<std::shared_ptr<const EmoteMap>> ffzEmotes_;
+     Atomic<boost::optional<EmotePtr>> ffzCustomModBadge_;
+diff --git a/src/providers/twitch/TwitchEmotes.cpp b/src/providers/twitch/TwitchEmotes.cpp
+index 9a84bcabf..f09e376d7 100644
+--- a/src/providers/twitch/TwitchEmotes.cpp
++++ b/src/providers/twitch/TwitchEmotes.cpp
+@@ -54,7 +54,7 @@ EmotePtr TwitchEmotes::getOrCreateEmote(const EmoteId &id,
+             ImageSet{
+                 Image::fromUrl(getEmoteLink(id, "1.0"), 1),
+                 Image::fromUrl(getEmoteLink(id, "2.0"), 0.5),
+-                Image::fromUrl(getEmoteLink(id, "3.0"), 0.25),
++                Image::fromUrl(getEmoteLink(id, "3.0"), 0.286),
+             },
+             Tooltip{name.toHtmlEscaped() + "<br>Twitch Emote"},
+         });
+diff --git a/src/providers/twitch/TwitchIrcServer.cpp b/src/providers/twitch/TwitchIrcServer.cpp
+index 8a0aa1642..72a248c76 100644
+--- a/src/providers/twitch/TwitchIrcServer.cpp
++++ b/src/providers/twitch/TwitchIrcServer.cpp
+@@ -48,6 +48,7 @@ void TwitchIrcServer::initialize(Settings &settings, Paths &paths)
+         });
+     });
+ 
++    this->seventv.loadEmotes();
+     this->bttv.loadEmotes();
+     this->ffz.loadEmotes();
+ }
+@@ -367,6 +368,11 @@ void TwitchIrcServer::onMessageSendRequested(TwitchChannel *channel,
+     sent = true;
+ }
+ 
++const SeventvEmotes &TwitchIrcServer::getSeventvEmotes() const
++{
++    return this->seventv;
++}
++
+ const BttvEmotes &TwitchIrcServer::getBttvEmotes() const
+ {
+     return this->bttv;
+diff --git a/src/providers/twitch/TwitchIrcServer.hpp b/src/providers/twitch/TwitchIrcServer.hpp
+index 8f519d4aa..fcbcb57bd 100644
+--- a/src/providers/twitch/TwitchIrcServer.hpp
++++ b/src/providers/twitch/TwitchIrcServer.hpp
+@@ -7,6 +7,7 @@
+ #include "providers/bttv/BttvEmotes.hpp"
+ #include "providers/ffz/FfzEmotes.hpp"
+ #include "providers/irc/AbstractIrcServer.hpp"
++#include "providers/seventv/SeventvEmotes.hpp"
+ 
+ #include <chrono>
+ #include <memory>
+@@ -40,6 +41,7 @@ public:
+ 
+     PubSub *pubsub;
+ 
++    const SeventvEmotes &getSeventvEmotes() const;
+     const BttvEmotes &getBttvEmotes() const;
+     const FfzEmotes &getFfzEmotes() const;
+ 
+@@ -72,6 +74,7 @@ private:
+     std::chrono::steady_clock::time_point lastErrorTimeSpeed_;
+     std::chrono::steady_clock::time_point lastErrorTimeAmount_;
+ 
++    SeventvEmotes seventv;
+     BttvEmotes bttv;
+     FfzEmotes ffz;
+ 
+diff --git a/src/providers/twitch/TwitchMessageBuilder.cpp b/src/providers/twitch/TwitchMessageBuilder.cpp
+index bdfb199a7..078aaabcb 100644
+--- a/src/providers/twitch/TwitchMessageBuilder.cpp
++++ b/src/providers/twitch/TwitchMessageBuilder.cpp
+@@ -972,6 +972,7 @@ Outcome TwitchMessageBuilder::tryAppendEmote(const EmoteName &name)
+ {
+     auto *app = getApp();
+ 
++    const auto &globalSeventvEmotes = app->twitch->getSeventvEmotes();
+     const auto &globalBttvEmotes = app->twitch->getBttvEmotes();
+     const auto &globalFfzEmotes = app->twitch->getFfzEmotes();
+ 
+@@ -987,11 +988,28 @@ Outcome TwitchMessageBuilder::tryAppendEmote(const EmoteName &name)
+     {
+         flags = MessageElementFlag::FfzEmote;
+     }
++    else if (this->twitchChannel &&
++             (emote = this->twitchChannel->seventvEmote(name)))
++    {
++        flags = MessageElementFlag::SeventvEmote;
++        if (emote.value()->zeroWidth)
++        {
++            flags.set(MessageElementFlag::ZeroWidthEmote);
++        }
++    }
+     else if (this->twitchChannel &&
+              (emote = this->twitchChannel->bttvEmote(name)))
+     {
+         flags = MessageElementFlag::BttvEmote;
+     }
++    else if ((emote = globalSeventvEmotes.emote(name)))
++    {
++        flags = MessageElementFlag::SeventvEmote;
++        if (emote.value()->zeroWidth)
++        {
++            flags.set(MessageElementFlag::ZeroWidthEmote);
++        }
++    }
+     else if ((emote = globalFfzEmotes.emote(name)))
+     {
+         flags = MessageElementFlag::FfzEmote;
+diff --git a/src/singletons/Emotes.hpp b/src/singletons/Emotes.hpp
+index be7fdc480..51faac660 100644
+--- a/src/singletons/Emotes.hpp
++++ b/src/singletons/Emotes.hpp
+@@ -5,6 +5,7 @@
+ #include "providers/bttv/BttvEmotes.hpp"
+ #include "providers/emoji/Emojis.hpp"
+ #include "providers/ffz/FfzEmotes.hpp"
++#include "providers/seventv/SeventvEmotes.hpp"
+ #include "providers/twitch/TwitchEmotes.hpp"
+ #include "singletons/helper/GifTimer.hpp"
+ 
+diff --git a/src/singletons/Settings.hpp b/src/singletons/Settings.hpp
+index 14ade6c93..9e39caee5 100644
+--- a/src/singletons/Settings.hpp
++++ b/src/singletons/Settings.hpp
+@@ -191,6 +191,7 @@ public:
+     BoolSetting enableEmoteImages = {"/emotes/enableEmoteImages", true};
+     BoolSetting animateEmotes = {"/emotes/enableGifAnimations", true};
+     FloatSetting emoteScale = {"/emotes/scale", 1.f};
++    BoolSetting showUnlistedEmotes = {"/emotes/showUnlistedEmotes", false};
+ 
+     QStringSetting emojiSet = {"/emotes/emojiSet", "Twitter"};
+ 
+diff --git a/src/widgets/dialogs/EmotePopup.cpp b/src/widgets/dialogs/EmotePopup.cpp
+index fc43d2800..6dca92cbf 100644
+--- a/src/widgets/dialogs/EmotePopup.cpp
++++ b/src/widgets/dialogs/EmotePopup.cpp
+@@ -350,12 +350,16 @@ void EmotePopup::loadChannel(ChannelPtr channel)
+         *globalChannel, *subChannel, this->channel_->getName());
+ 
+     // global
++    addEmotes(*globalChannel, *getApp()->twitch->getSeventvEmotes().emotes(),
++              "7TV", MessageElementFlag::SeventvEmote);
+     addEmotes(*globalChannel, *getApp()->twitch->getBttvEmotes().emotes(),
+               "BetterTTV", MessageElementFlag::BttvEmote);
+     addEmotes(*globalChannel, *getApp()->twitch->getFfzEmotes().emotes(),
+               "FrankerFaceZ", MessageElementFlag::FfzEmote);
+ 
+     // channel
++    addEmotes(*channelChannel, *this->twitchChannel_->seventvEmotes(), "7TV",
++              MessageElementFlag::SeventvEmote);
+     addEmotes(*channelChannel, *this->twitchChannel_->bttvEmotes(), "BetterTTV",
+               MessageElementFlag::BttvEmote);
+     addEmotes(*channelChannel, *this->twitchChannel_->ffzEmotes(),
+@@ -414,6 +418,8 @@ void EmotePopup::filterTwitchEmotes(std::shared_ptr<Channel> searchChannel,
+             twitchGlobalEmotes.push_back(setCopy);
+     }
+ 
++    auto seventvGlobalEmotes = this->filterEmoteMap(
++        searchText, getApp()->twitch->getSeventvEmotes().emotes());
+     auto bttvGlobalEmotes = this->filterEmoteMap(
+         searchText, getApp()->twitch->getBttvEmotes().emotes());
+     auto ffzGlobalEmotes = this->filterEmoteMap(
+@@ -424,6 +430,9 @@ void EmotePopup::filterTwitchEmotes(std::shared_ptr<Channel> searchChannel,
+                  this->channel_->getName());
+ 
+     // global
++    if (seventvGlobalEmotes->size() > 0)
++        addEmotes(*searchChannel, *seventvGlobalEmotes, "SevenTV (Global)",
++                  MessageElementFlag::SeventvEmote);
+     if (bttvGlobalEmotes->size() > 0)
+         addEmotes(*searchChannel, *bttvGlobalEmotes, "BetterTTV (Global)",
+                   MessageElementFlag::BttvEmote);
+@@ -436,11 +445,16 @@ void EmotePopup::filterTwitchEmotes(std::shared_ptr<Channel> searchChannel,
+         return;
+     }
+ 
++    auto seventvChannelEmotes =
++        this->filterEmoteMap(searchText, this->twitchChannel_->seventvEmotes());
+     auto bttvChannelEmotes =
+         this->filterEmoteMap(searchText, this->twitchChannel_->bttvEmotes());
+     auto ffzChannelEmotes =
+         this->filterEmoteMap(searchText, this->twitchChannel_->ffzEmotes());
+     // channel
++    if (seventvChannelEmotes->size() > 0)
++        addEmotes(*searchChannel, *seventvChannelEmotes, "SevenTV (Channel)",
++                  MessageElementFlag::SeventvEmote);
+     if (bttvChannelEmotes->size() > 0)
+         addEmotes(*searchChannel, *bttvChannelEmotes, "BetterTTV (Channel)",
+                   MessageElementFlag::BttvEmote);
+diff --git a/src/widgets/helper/Button.cpp b/src/widgets/helper/Button.cpp
+index 0d7067937..214d2e889 100644
+--- a/src/widgets/helper/Button.cpp
++++ b/src/widgets/helper/Button.cpp
+@@ -4,6 +4,7 @@
+ #include <QDebug>
+ #include <QDesktopWidget>
+ #include <QPainter>
++#include <QPalette>
+ 
+ #include "BaseTheme.hpp"
+ #include "util/FunctionEventFilter.hpp"
+@@ -34,6 +35,7 @@ Button::Button(BaseWidget *parent)
+     this->effectTimer_.start();
+ 
+     this->setMouseTracking(true);
++    this->setBackgroundRole(QPalette::Window);
+ }
+ 
+ void Button::setMouseEffectColor(boost::optional<QColor> color)
+diff --git a/src/widgets/helper/ChannelView.cpp b/src/widgets/helper/ChannelView.cpp
+index c938ceee2..926e19de6 100644
+--- a/src/widgets/helper/ChannelView.cpp
++++ b/src/widgets/helper/ChannelView.cpp
+@@ -92,6 +92,7 @@ namespace {
+         addImageLink(emote.images.getImage1(), '1');
+         addImageLink(emote.images.getImage2(), '2');
+         addImageLink(emote.images.getImage3(), '3');
++        addImageLink(emote.images.getImage4(), '4');
+ 
+         // Copy and open emote page link
+         auto addPageLink = [&](const QString &name) {
+@@ -108,7 +109,11 @@ namespace {
+                                 });
+         };
+ 
+-        if (creatorFlags.has(MessageElementFlag::BttvEmote))
++        if (creatorFlags.has(MessageElementFlag::SeventvEmote))
++        {
++            addPageLink("7TV");
++        }
++        else if (creatorFlags.has(MessageElementFlag::BttvEmote))
+         {
+             addPageLink("BTTV");
+         }
+@@ -1465,12 +1470,12 @@ void ChannelView::mouseMoveEvent(QMouseEvent *event)
+                 if (emoteElement)
+                 {
+                     tooltipPreviewImage.setImage(
+-                        emoteElement->getEmote()->images.getImage(3.0));
++                        emoteElement->getEmote()->images.getImage(4.0));
+                 }
+                 else if (badgeElement)
+                 {
+                     tooltipPreviewImage.setImage(
+-                        badgeElement->getEmote()->images.getImage(3.0));
++                        badgeElement->getEmote()->images.getImage(4.0));
+                 }
+             }
+             else
+diff --git a/src/widgets/settingspages/GeneralPage.cpp b/src/widgets/settingspages/GeneralPage.cpp
+index 8895ccd24..8636abfc1 100644
+--- a/src/widgets/settingspages/GeneralPage.cpp
++++ b/src/widgets/settingspages/GeneralPage.cpp
+@@ -6,6 +6,8 @@
+ 
+ #include "Application.hpp"
+ #include "common/Version.hpp"
++#include "providers/twitch/TwitchChannel.hpp"
++#include "providers/twitch/TwitchIrcServer.hpp"
+ #include "singletons/Fonts.hpp"
+ #include "singletons/NativeMessaging.hpp"
+ #include "singletons/Paths.hpp"
+@@ -301,7 +303,7 @@ void GeneralPage::initLayout(GeneralPageView &layout)
+     layout.addCheckbox("Enable emote auto-completion by typing :",
+                        s.emoteCompletionWithColon);
+     layout.addDropdown<float>(
+-        "Size", {"0.5x", "0.75x", "Default", "1.25x", "1.5x", "2x"},
++        "Size", {"0.5x", "0.75x", "Default", "1.25x", "1.5x", "2x", "3x", "4x"},
+         s.emoteScale,
+         [](auto val) {
+             if (val == 1)
+@@ -315,6 +317,23 @@ void GeneralPage::initLayout(GeneralPageView &layout)
+ 
+     layout.addCheckbox("Remove spaces between emotes",
+                        s.removeSpacesBetweenEmotes);
++    layout.addCheckbox("Show unlisted / unapproved emotes (7TV only)",
++                       s.showUnlistedEmotes);
++    s.showUnlistedEmotes.connect(
++        []() {
++            getApp()->twitch->forEachChannelAndSpecialChannels(
++                [](const auto &c) {
++                    if (c->isTwitchChannel())
++                    {
++                        auto channel = dynamic_cast<TwitchChannel *>(c.get());
++                        if (channel != nullptr)
++                        {
++                            channel->refresh7TVChannelEmotes(false);
++                        }
++                    }
++                });
++        },
++        false);
+     layout.addDropdown<int>(
+         "Show info on hover", {"Don't show", "Always show", "Hold shift"},
+         s.emotesTooltipPreview,
+diff --git a/src/widgets/splits/InputCompletionPopup.cpp b/src/widgets/splits/InputCompletionPopup.cpp
+index 1cf8fee5e..10c8c063c 100644
+--- a/src/widgets/splits/InputCompletionPopup.cpp
++++ b/src/widgets/splits/InputCompletionPopup.cpp
+@@ -5,6 +5,7 @@
+ #include "messages/Emote.hpp"
+ #include "providers/bttv/BttvEmotes.hpp"
+ #include "providers/ffz/FfzEmotes.hpp"
++#include "providers/seventv/SeventvEmotes.hpp"
+ #include "providers/twitch/TwitchChannel.hpp"
+ #include "providers/twitch/TwitchIrcServer.hpp"
+ #include "singletons/Emotes.hpp"
+@@ -99,6 +100,8 @@ void InputCompletionPopup::updateEmotes(const QString &text, ChannelPtr channel)
+ 
+         if (tc)
+         {
++            if (auto seventv = tc->seventvEmotes())
++                addEmotes(emotes, *seventv, text, "Channel 7TV");
+             // TODO extract "Channel BetterTTV" text into a #define.
+             if (auto bttv = tc->bttvEmotes())
+                 addEmotes(emotes, *bttv, text, "Channel BetterTTV");
+@@ -106,6 +109,8 @@ void InputCompletionPopup::updateEmotes(const QString &text, ChannelPtr channel)
+                 addEmotes(emotes, *ffz, text, "Channel FrankerFaceZ");
+         }
+ 
++        if (auto seventvG = getApp()->twitch->getSeventvEmotes().emotes())
++            addEmotes(emotes, *seventvG, text, "Global 7TV");
+         if (auto bttvG = getApp()->twitch->getBttvEmotes().emotes())
+             addEmotes(emotes, *bttvG, text, "Global BetterTTV");
+         if (auto ffzG = getApp()->twitch->getFfzEmotes().emotes())
+diff --git a/src/widgets/splits/Split.cpp b/src/widgets/splits/Split.cpp
+index 2a0267a2b..6379e04a3 100644
+--- a/src/widgets/splits/Split.cpp
++++ b/src/widgets/splits/Split.cpp
+@@ -1151,6 +1151,7 @@ void Split::reloadChannelAndSubscriberEmotes()
+ 
+     if (auto twitchChannel = dynamic_cast<TwitchChannel *>(channel.get()))
+     {
++        twitchChannel->refresh7TVChannelEmotes(true);
+         twitchChannel->refreshBTTVChannelEmotes(true);
+         twitchChannel->refreshFFZChannelEmotes(true);
+     }
+diff --git a/src/widgets/splits/SplitHeader.cpp b/src/widgets/splits/SplitHeader.cpp
+index c468a5c95..96bf2b342 100644
+--- a/src/widgets/splits/SplitHeader.cpp
++++ b/src/widgets/splits/SplitHeader.cpp
+@@ -936,6 +936,7 @@ void SplitHeader::reloadChannelEmotes()
+ 
+     if (auto twitchChannel = dynamic_cast<TwitchChannel *>(channel.get()))
+     {
++        twitchChannel->refresh7TVChannelEmotes(true);
+         twitchChannel->refreshFFZChannelEmotes(true);
+         twitchChannel->refreshBTTVChannelEmotes(true);
+     }
