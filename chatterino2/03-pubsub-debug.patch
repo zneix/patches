@@ -1,0 +1,12 @@
+diff --git a/src/providers/twitch/PubSubManager.cpp b/src/providers/twitch/PubSubManager.cpp
+index cce10786..66bb1ae3 100644
+--- a/src/providers/twitch/PubSubManager.cpp
++++ b/src/providers/twitch/PubSubManager.cpp
+@@ -1007,6 +1007,7 @@ void PubSub::handleUnlistenResponse(const NonceInfo &info, bool failed)
+ void PubSub::handleMessageResponse(const PubSubMessageMessage &message)
+ {
+     QString topic = message.topic;
++    qCDebug(chatterinoPubSub) << message.topic << message.messageObject;
+ 
+     if (topic.startsWith("whispers."))
+     {
