@@ -857,18 +857,18 @@ index 9a84bcabf..f09e376d7 100644
              Tooltip{name.toHtmlEscaped() + "<br>Twitch Emote"},
          });
 diff --git a/src/providers/twitch/TwitchIrcServer.cpp b/src/providers/twitch/TwitchIrcServer.cpp
-index 8a0aa1642..72a248c76 100644
+index 2869a185..3351d321 100644
 --- a/src/providers/twitch/TwitchIrcServer.cpp
 +++ b/src/providers/twitch/TwitchIrcServer.cpp
-@@ -48,6 +48,7 @@ void TwitchIrcServer::initialize(Settings &settings, Paths &paths)
+@@ -51,6 +51,7 @@ void TwitchIrcServer::initialize(Settings &settings, Paths &paths)
          });
      });
  
 +    this->seventv.loadEmotes();
      this->bttv.loadEmotes();
      this->ffz.loadEmotes();
- }
-@@ -367,6 +368,11 @@ void TwitchIrcServer::onMessageSendRequested(TwitchChannel *channel,
+ 
+@@ -434,6 +435,11 @@ void TwitchIrcServer::onMessageSendRequested(TwitchChannel *channel,
      sent = true;
  }
  
@@ -881,7 +881,7 @@ index 8a0aa1642..72a248c76 100644
  {
      return this->bttv;
 diff --git a/src/providers/twitch/TwitchIrcServer.hpp b/src/providers/twitch/TwitchIrcServer.hpp
-index 8f519d4aa..fcbcb57bd 100644
+index fd693a20..342fc17a 100644
 --- a/src/providers/twitch/TwitchIrcServer.hpp
 +++ b/src/providers/twitch/TwitchIrcServer.hpp
 @@ -7,6 +7,7 @@
@@ -892,7 +892,7 @@ index 8f519d4aa..fcbcb57bd 100644
  
  #include <chrono>
  #include <memory>
-@@ -40,6 +41,7 @@ public:
+@@ -42,6 +43,7 @@ public:
  
      PubSub *pubsub;
  
@@ -900,14 +900,14 @@ index 8f519d4aa..fcbcb57bd 100644
      const BttvEmotes &getBttvEmotes() const;
      const FfzEmotes &getFfzEmotes() const;
  
-@@ -72,6 +74,7 @@ private:
+@@ -74,6 +76,7 @@ private:
      std::chrono::steady_clock::time_point lastErrorTimeSpeed_;
      std::chrono::steady_clock::time_point lastErrorTimeAmount_;
  
 +    SeventvEmotes seventv;
      BttvEmotes bttv;
      FfzEmotes ffz;
- 
+     QTimer bulkLiveStatusTimer_;
 diff --git a/src/providers/twitch/TwitchMessageBuilder.cpp b/src/providers/twitch/TwitchMessageBuilder.cpp
 index bdfb199a7..078aaabcb 100644
 --- a/src/providers/twitch/TwitchMessageBuilder.cpp
