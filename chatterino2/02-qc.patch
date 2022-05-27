@@ -1,8 +1,8 @@
 diff --git a/src/controllers/commands/CommandController.cpp b/src/controllers/commands/CommandController.cpp
-index caa3c89f3..6e308838a 100644
+index 843b953a..ac4762c5 100644
 --- a/src/controllers/commands/CommandController.cpp
 +++ b/src/controllers/commands/CommandController.cpp
-@@ -23,6 +23,7 @@
+@@ -26,6 +26,7 @@
  #include "util/StreamLink.hpp"
  #include "util/Twitch.hpp"
  #include "widgets/Window.hpp"
@@ -10,8 +10,8 @@ index caa3c89f3..6e308838a 100644
  #include "widgets/dialogs/UserInfoPopup.hpp"
  #include "widgets/splits/Split.hpp"
  
-@@ -925,6 +926,13 @@ void CommandController::initialize(Settings &, Paths &paths)
-             getApp()->twitch->addFakeMessage(ircText);
+@@ -998,6 +999,13 @@ void CommandController::initialize(Settings &, Paths &paths)
+             crossPlatformCopy(words.mid(1).join(" "));
              return "";
          });
 +
@@ -21,6 +21,6 @@ index caa3c89f3..6e308838a 100644
 +            QualityPopup::showDialog(channel->getName(), {"a", "b"});
 +            return "";
 +        });
- #endif
  }
  
+ void CommandController::save()
